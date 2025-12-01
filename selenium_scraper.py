@@ -38,26 +38,53 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
             cpf_limpo = cpf_para_pesquisa.replace(".", "").replace("-", "")
             print(f"CPF inserido: {cpf_limpo}")
             await frame.fill("#pesquisaAtos\\:cpf", cpf_limpo)
-            
-            print("Clicando no botão de busca...")
             await frame.click("#pesquisaAtos\\:abrirAtos")
             
             # Aguarda resultados
-            await page.wait_for_timeout(4000)
+            await page.wait_for_timeout(6000)
             print("Aguardando resultados...")
             
-            # Tenta localizar a tabela com dados
+            # Tenta localizar a tabela com dados (maior timeout)
             try:
-                await frame.wait_for_selector("table tbody tr", timeout=10000)
+                await frame.wait_for_selector("table tbody tr", timeout=15000)
                 print("Tabela encontrada com dados")
-            except:
-                print("Aviso: tbody não encontrado, tentando mesmo assim...")
+            except Exception:
+                print("Aviso: tbody/tr não apareceu dentro do timeout. Irei salvar o HTML para debug.")
             
-            # Pega HTML da tabela
-            table_html = await frame.inner_html("table")
-            if not table_html:
-                print("Nenhuma tabela encontrada")
-                return None, "Nenhum registro encontrado para o CPF informado."
+            # Pega HTML completo do frame e da página para debug
+            try:
+                frame_html = await frame.content()
+            except Exception:
+                frame_html = ""
+            try:
+                page_html = await page.content()
+            except Exception:
+                page_html = ""
+            
+            # salva arquivos de debug
+            try:
+                with open("/tmp/iframe_debug.html", "w", encoding="utf-8") as f:
+                    f.write(frame_html)
+                with open("/tmp/page_debug.html", "w", encoding="utf-8") as f:
+                    f.write(page_html)
+                print("HTML de debug salvo em /tmp/iframe_debug.html e /tmp/page_debug.html")
+            except Exception as e:
+                print(f"Falha ao salvar HTML de debug: {e}")
+            
+            # imprime parte do HTML nos logs para inspeção rápida
+            print("=== INÍCIO PREVIEW DO IFRAME HTML ===")
+            print((frame_html or page_html)[:4000])
+            print("=== FIM PREVIEW DO IFRAME HTML ===")
+            
+            # tenta extrair a tabela (se existir)
+            table_html = ""
+            try:
+                table_html = await frame.inner_html("table")
+            except Exception:
+                table_html = ""
+            
+            if not table_html or table_html.strip() == "":
+                return None, "Tabela de resultados não encontrada no HTML processado. HTML salvo em /tmp/iframe_debug.html (ver logs para preview)."
             
             print("Tabela extraída com sucesso")
             return table_html, None
