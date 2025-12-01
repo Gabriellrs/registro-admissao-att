@@ -3,4 +3,4 @@ flask-cors
 selenium
 beautifulsoup4
 gunicorn
-webdriver-manager==4.11.0
+webdriver-manager==4.0.2
