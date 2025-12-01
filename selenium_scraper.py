@@ -1,0 +1,155 @@
+# selenium_scraper.py
+import os
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+from bs4 import BeautifulSoup
+import json
+
+# --- Configuração do Selenium ---
+
+def create_driver():
+    """Cria e configura o WebDriver do Selenium para usar o Chromium em modo headless."""
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    
+    try:
+        print("Iniciando o driver do Selenium com Chromium...")
+        driver = webdriver.Chrome(options=options)
+        return driver
+    except Exception as e:
+        print(f"Erro ao iniciar o WebDriver: {e}")
+        # Retornar o erro para que a API possa reportá-lo
+        raise RuntimeError(f"Falha ao iniciar o WebDriver: {e}")
+
+
+def fetch_data_with_selenium(driver, cpf_para_pesquisa):
+    """Busca os dados no TCM-GO usando Selenium."""
+    url = "https://www.tcmgo.tc.br/site/portal-da-transparencia/consulta-de-contratos-de-pessoal/"
+    
+    try:
+        print(f"Acessando a página para o CPF: {cpf_para_pesquisa}")
+        driver.get(url)
+
+        wait = WebDriverWait(driver, 20)
+        iframe = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "iframe[src*='consulta-ato-pessoal']")))
+        driver.switch_to.frame(iframe)
+        
+        cpf_input = wait.until(EC.presence_of_element_located((By.ID, "pesquisaAtos:cpf")))
+        cpf_input.send_keys(cpf_para_pesquisa)
+        
+        search_button = driver.find_element(By.ID, "pesquisaAtos:abrirAtos")
+        search_button.click()
+
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#panelGroup table tbody tr")))
+        result_table = driver.find_element(By.ID, "panelGroup")
+        
+        print("Tabela de resultados encontrada.")
+        return result_table.get_attribute('outerHTML'), None
+
+    except TimeoutException:
+        print("Tempo de espera excedido. A busca não retornou resultados.")
+        return None, "A busca não retornou resultados a tempo. Verifique o CPF ou tente novamente."
+    except Exception as e:
+        print(f"Ocorreu um erro durante a raspagem com Selenium: {e}")
+        return None, f"Erro inesperado durante a raspagem: {e}"
+    finally:
+        driver.switch_to.default_content()
+
+
+def extract_data_from_html(html_content):
+    """Extrai os dados da tabela de resultados a partir do HTML."""
+    soup = BeautifulSoup(html_content, 'html.parser')
+    table = soup.find('table')
+
+    if not table:
+        return [], "Tabela de resultados não encontrada no HTML processado."
+
+    headers = [header.text.strip() for header in table.find_all('th')]
+    data = []
+    rows = table.find('tbody').find_all('tr')
+    
+    if not rows or (len(rows) == 1 and "Nenhum registro encontrado" in rows[0].text):
+        return [], None
+
+    for row in rows:
+        row_data = {}
+        cells = row.find_all('td')
+        if len(cells) == len(headers):
+            for i, cell in enumerate(cells):
+                row_data[headers[i]] = cell.text.strip()
+            data.append(row_data)
+
+    return data, None
+
+# --- API Flask ---
+
+app = Flask(__name__)
+CORS(app)
+
+@app.route('/api/buscar-registro-selenium', methods=['POST'])
+def buscar_registro_selenium():
+    """Endpoint para receber a requisição de busca e retornar os dados usando Selenium."""
+    if not request.is_json:
+        return jsonify({"error": "O corpo da requisição deve ser JSON."}), 415
+
+    data = request.json
+    cpf = data.get('cpf')
+
+    if not cpf:
+        return jsonify({"error": "O campo 'cpf' é obrigatório."}), 400
+
+    driver = None
+    try:
+        driver = create_driver()
+        html_content, error = fetch_data_with_selenium(driver, cpf)
+        
+        if error:
+            # Erros de `fetch_data` já são formatados para o cliente.
+            return jsonify({"error": error}), 500
+        
+        if not html_content:
+            return jsonify({"message": "Nenhum conteúdo HTML foi retornado da busca."}), 404
+
+        extracted_data, error_extract = extract_data_from_html(html_content)
+        
+        if error_extract:
+            return jsonify({"error": f"Erro ao processar os dados: {error_extract}"}), 500
+
+        if extracted_data:
+            tipos_desejados = ["Admissao", "Concursado"]
+            dados_filtrados = [item for item in extracted_data if item.get('Tipo de Contrato') in tipos_desejados]
+            
+            if dados_filtrados:
+                print(f"Encontrados {len(dados_filtrados)} registros de admissão para o CPF.")
+                # Retorna o primeiro registro de admissão, como no app.py original
+                return jsonify(dados_filtrados[0])
+            else:
+                print("Nenhum registro de admissão (Admissao/Concursado) encontrado.")
+                return jsonify({"message": "Nenhum registro de admissão do tipo 'Admissao' ou 'Concursado' foi encontrado."}), 404
+        else:
+            print("Nenhum registro encontrado para o CPF.")
+            return jsonify({"message": "Nenhum registro encontrado para o CPF informado."}), 404
+
+    except RuntimeError as e:
+        # Captura o erro específico de falha ao iniciar o driver
+        return jsonify({"error": str(e)}), 503 # Service Unavailable
+    except Exception as e:
+        # Captura outras exceções inesperadas
+        print(f"Erro fatal na API: {e}")
+        return jsonify({"error": f"Erro interno no servidor: {e}"}), 500
+    finally:
+        if driver:
+            print("Fechando o driver do Selenium.")
+            driver.quit()
+
+# Para rodar localmente para teste:
+# if __name__ == '__main__':
+#     app.run(debug=True, port=5001)
