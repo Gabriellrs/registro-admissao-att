@@ -9,24 +9,43 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from bs4 import BeautifulSoup
 import json
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
 # --- Configuração do Selenium ---
 
 def create_driver():
-    """Cria e configura o WebDriver do Selenium para usar o Chromium em modo headless."""
+    """Cria e configura o WebDriver do Selenium para usar o Chromium em modo headless.
+    Usa webdriver-manager para instalar o chromedriver e respeita CHROME_BIN se definido."""
     options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
+    # Headless moderno
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    # Força tamanho da janela (evita responsividade que muda DOM)
+    options.add_argument("--window-size=1920,1080")
+    # User agent comum para reduzir detecção
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36")
+    # Se houver caminho do binário (Render/Heroku/others)
+    chrome_bin = os.environ.get("CHROME_BIN") or os.environ.get("GOOGLE_CHROME_BIN") or os.environ.get("CHROME_PATH")
+    if chrome_bin:
+        options.binary_location = chrome_bin
+        print(f"Usando binário do Chrome em: {chrome_bin}")
+
     try:
-        print("Iniciando o driver do Selenium com Chromium...")
-        driver = webdriver.Chrome(options=options)
+        print("Iniciando o driver do Selenium com Chromium (webdriver-manager)...")
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
+        # pequenas alterações anti-deteção
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        })
         return driver
     except Exception as e:
         print(f"Erro ao iniciar o WebDriver: {e}")
-        # Retornar o erro para que a API possa reportá-lo
         raise RuntimeError(f"Falha ao iniciar o WebDriver: {e}")
 
 
@@ -99,6 +118,15 @@ def fetch_data_with_selenium(driver, cpf_para_pesquisa):
         
         if not result_table_html:
             print("Nenhuma tabela com dados foi encontrada")
+            # salva HTML do iframe para debug (no Render /tmp é ok)
+            try:
+                iframe_html = driver.page_source
+                debug_path = "/tmp/iframe_debug.html"
+                with open(debug_path, "w", encoding="utf-8") as f:
+                    f.write(iframe_html)
+                print(f"HTML do iframe salvo para debug em: {debug_path}")
+            except Exception as e:
+                print(f"Não foi possível salvar HTML de debug: {e}")
             return None, "Nenhum registro encontrado para o CPF informado."
         
         print("Tabela de resultados encontrada com sucesso.")
