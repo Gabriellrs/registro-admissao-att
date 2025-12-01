@@ -37,28 +37,80 @@ def fetch_data_with_selenium(driver, cpf_para_pesquisa):
     try:
         print(f"Acessando a página para o CPF: {cpf_para_pesquisa}")
         driver.get(url)
+        
+        import time
+        time.sleep(3)
 
         wait = WebDriverWait(driver, 20)
-        iframe = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "iframe[src*='consulta-ato-pessoal']")))
-        driver.switch_to.frame(iframe)
         
+        try:
+            iframe = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "iframe[src*='consulta-ato-pessoal']")))
+        except:
+            print("Iframe com src contendo 'consulta-ato-pessoal' não encontrado. Tentando por tag iframe...")
+            iframes = driver.find_elements(By.TAG_NAME, "iframe")
+            print(f"Total de iframes encontrados: {len(iframes)}")
+            if iframes:
+                iframe = iframes[0]
+            else:
+                raise Exception("Nenhum iframe encontrado na página")
+        
+        driver.switch_to.frame(iframe)
+        print("Dentro do iframe com sucesso")
+        
+        cpf_limpo = cpf_para_pesquisa.replace(".", "").replace("-", "")
         cpf_input = wait.until(EC.presence_of_element_located((By.ID, "pesquisaAtos:cpf")))
-        cpf_input.send_keys(cpf_para_pesquisa)
+        cpf_input.clear()
+        cpf_input.send_keys(cpf_limpo)
+        print(f"CPF inserido: {cpf_limpo}")
         
         search_button = wait.until(EC.element_to_be_clickable((By.ID, "pesquisaAtos:abrirAtos")))
         driver.execute_script("arguments[0].click();", search_button)
-
-        wait.until(EC.visibility_of_element_located((By.ID, "panelGroup")))
-        result_table = driver.find_element(By.ID, "panelGroup")
+        print("Botão clicado")
         
-        print("Tabela de resultados encontrada.")
-        return result_table.get_attribute('outerHTML'), None
+        time.sleep(5)
+        
+        # Aguarda a tabela com tbody aparecer
+        try:
+            wait.until(EC.visibility_of_element_located((By.TAG_NAME, "tbody")))
+            print("Tbody encontrado - resultados carregados")
+        except:
+            print("Aviso: tbody não encontrado após busca")
+        
+        # Procura por uma tabela que contenha dados reais
+        tables = driver.find_elements(By.TAG_NAME, "table")
+        print(f"Total de tabelas encontradas: {len(tables)}")
+        
+        result_table_html = None
+        
+        for idx, table in enumerate(tables):
+            tbody = table.find_element(By.TAG_NAME, "tbody")
+            rows = tbody.find_elements(By.TAG_NAME, "tr")
+            print(f"Tabela {idx}: {len(rows)} linhas")
+            
+            # Pega a tabela que tem mais de 0 linhas de dados
+            if len(rows) > 0:
+                # Verifica se não é a mensagem "Nenhum registro encontrado"
+                first_row_text = rows[0].text
+                if "Nenhum registro" not in first_row_text.lower():
+                    result_table_html = table.get_attribute('outerHTML')
+                    print(f"Tabela com dados encontrada (índice {idx})")
+                    print(f"Primeiras 500 caracteres do HTML: {result_table_html[:500]}")
+                    break
+        
+        if not result_table_html:
+            print("Nenhuma tabela com dados foi encontrada")
+            return None, "Nenhum registro encontrado para o CPF informado."
+        
+        print("Tabela de resultados encontrada com sucesso.")
+        return result_table_html, None
 
-    except TimeoutException:
-        print("Tempo de espera excedido. A busca não retornou resultados.")
+    except TimeoutException as e:
+        print(f"Tempo de espera excedido: {e}")
         return None, "A busca não retornou resultados a tempo. Verifique o CPF ou tente novamente."
     except Exception as e:
         print(f"Ocorreu um erro durante a raspagem com Selenium: {e}")
+        import traceback
+        traceback.print_exc()
         return None, f"Erro inesperado durante a raspagem: {e}"
     finally:
         driver.switch_to.default_content()
@@ -73,20 +125,46 @@ def extract_data_from_html(html_content):
         return [], "Tabela de resultados não encontrada no HTML processado."
 
     headers = [header.text.strip() for header in table.find_all('th')]
-    data = []
-    rows = table.find('tbody').find_all('tr')
+    print(f"Headers encontrados: {headers}")
     
-    if not rows or (len(rows) == 1 and "Nenhum registro encontrado" in rows[0].text):
-        return [], None
-
-    for row in rows:
-        row_data = {}
+    data = []
+    tbody = table.find('tbody')
+    
+    if not tbody:
+        print("Aviso: tbody não encontrado no HTML")
+        return [], "tbody não encontrado"
+    
+    rows = tbody.find_all('tr')
+    print(f"Linhas encontradas no tbody: {len(rows)}")
+    
+    if not rows:
+        return [], "Nenhuma linha encontrada na tabela"
+    
+    # Verifica a primeira linha
+    if len(rows) == 1:
+        first_row_text = rows[0].text.strip()
+        print(f"Texto da primeira (única) linha: '{first_row_text}'")
+        if "Nenhum registro" in first_row_text.lower() or first_row_text == "":
+            return [], None
+    
+    for idx, row in enumerate(rows):
         cells = row.find_all('td')
+        print(f"Linha {idx}: {len(cells)} células encontradas")
+        
+        # Imprime o conteúdo de cada célula
+        for cell_idx, cell in enumerate(cells):
+            cell_text = cell.text.strip()
+            print(f"  Célula {cell_idx}: '{cell_text}'")
+        
+        row_data = {}
         if len(cells) == len(headers):
             for i, cell in enumerate(cells):
                 row_data[headers[i]] = cell.text.strip()
             data.append(row_data)
+        else:
+            print(f"  Aviso: Número de células ({len(cells)}) não corresponde ao número de headers ({len(headers)})")
 
+    print(f"Total de registros extraídos: {len(data)}")
     return data, None
 
 # --- API Flask ---
@@ -152,4 +230,4 @@ def buscar_registro_selenium():
 
 # Para rodar localmente para teste:
 # if __name__ == '__main__':
-#     app.run(debug=True, port=5001)
+#    app.run(debug=True, port=5001)
