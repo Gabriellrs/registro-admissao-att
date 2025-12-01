@@ -10,43 +10,64 @@ from flask_cors import CORS
 from bs4 import BeautifulSoup
 import json
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 
 # --- Configuração do Selenium ---
 
 def create_driver():
     """Cria e configura o WebDriver do Selenium para usar o Chromium em modo headless.
-    Usa webdriver-manager para instalar o chromedriver e respeita CHROME_BIN se definido."""
+    Usa webdriver-manager se disponível, senão tenta usar CHROMEDRIVER_PATH ou chromedriver no PATH."""
+    # tenta importar webdriver_manager apenas aqui (evita crash na importação do módulo)
+    try:
+        from webdriver_manager.chrome import ChromeDriverManager
+        use_wdm = True
+    except ModuleNotFoundError:
+        ChromeDriverManager = None
+        use_wdm = False
+
     options = webdriver.ChromeOptions()
-    # Headless moderno
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-blink-features=AutomationControlled")
-    # Força tamanho da janela (evita responsividade que muda DOM)
     options.add_argument("--window-size=1920,1080")
-    # User agent comum para reduzir detecção
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36")
-    # Se houver caminho do binário (Render/Heroku/others)
+
     chrome_bin = os.environ.get("CHROME_BIN") or os.environ.get("GOOGLE_CHROME_BIN") or os.environ.get("CHROME_PATH")
     if chrome_bin:
         options.binary_location = chrome_bin
         print(f"Usando binário do Chrome em: {chrome_bin}")
 
     try:
-        print("Iniciando o driver do Selenium com Chromium (webdriver-manager)...")
-        service = Service(ChromeDriverManager().install())
+        print("Iniciando o driver do Selenium com Chromium...")
+        if use_wdm:
+            service = Service(ChromeDriverManager().install())
+        else:
+            # tenta usar chromedriver provido pelo ambiente
+            chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
+            if chromedriver_path:
+                service = Service(chromedriver_path)
+                print(f"Usando chromedriver em: {chromedriver_path}")
+            else:
+                # tenta usar chromedriver do PATH
+                service = Service()  # Service() usará chromedriver no PATH
+                print("webdriver-manager não instalado: esperando chromedriver no PATH ou defina CHROMEDRIVER_PATH")
+
         driver = webdriver.Chrome(service=service, options=options)
-        # pequenas alterações anti-deteção
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        })
+        # pequeno ajuste anti-deteção
+        try:
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            })
+        except Exception:
+            pass
         return driver
     except Exception as e:
         print(f"Erro ao iniciar o WebDriver: {e}")
-        raise RuntimeError(f"Falha ao iniciar o WebDriver: {e}")
+        raise RuntimeError(
+            "Falha ao iniciar o WebDriver. Instale 'webdriver-manager' no requirements.txt ou forneça chromedriver via CHROMEDRIVER_PATH ou PATH."
+        )
 
 
 def fetch_data_with_selenium(driver, cpf_para_pesquisa):
