@@ -1,5 +1,6 @@
 flask
 flask-cors
 selenium
-gunicorn
 beautifulsoup4
+gunicorn
+webdriver-manager==4.11.0
