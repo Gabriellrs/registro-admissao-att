@@ -23,4 +23,4 @@ COPY . .
 # Comando para iniciar a aplicação usando Gunicorn
 # O Render define a variável de ambiente PORT, e o Gunicorn irá se vincular a ela.
 # Usamos 0.0.0.0 para que o contêiner aceite conexões de fora.
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "selenium_scraper:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "120", "selenium_scraper:app"]
