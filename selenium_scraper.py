@@ -14,57 +14,58 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
     url = "https://www.tcmgo.tc.br/site/portal-da-transparencia/consulta-de-contratos-de-pessoal/"
 
     async with async_playwright() as p:
-        # args para ambiente container
         launch_args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
         browser = await p.chromium.launch(headless=True, args=launch_args)
-        # definir user-agent no context para reduzir detecção
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
         context = await browser.new_context(user_agent=user_agent, viewport={"width":1920, "height":1080})
         page = await context.new_page()
         try:
             print(f"Acessando a página para o CPF: {cpf_para_pesquisa}")
 
-            # Tentativa principal (networkidle) com timeout maior
             try:
                 await page.goto(url, wait_until="networkidle", timeout=60000)
                 print("page.goto networkidle OK")
             except Exception as e_net:
-                print(f"networkidle timeout ou erro: {e_net}. Tentando domcontentloaded...")
+                print(f"networkidle timeout: {e_net}. Tentando domcontentloaded...")
                 try:
                     await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                     print("page.goto domcontentloaded OK")
                 except Exception as e_dom:
-                    print(f"domcontentloaded também falhou: {e_dom}. Tentando goto sem espera (curto timeout)...")
-                    try:
-                        await page.goto(url, timeout=15000)
-                        print("page.goto sem wait_until OK")
-                    except Exception as e_final:
-                        print(f"Falha final ao navegar: {e_final}")
-                        return None, f"Timeout ao acessar a página: {e_final}"
+                    print(f"domcontentloaded falhou: {e_dom}")
+                    return None, f"Timeout ao acessar a página"
 
-            # localizar iframe (fallbacks)
             print("Procurando iframe...")
             iframe_handle = await page.query_selector("iframe[src*='consulta-ato-pessoal']")
             if not iframe_handle:
                 iframes = await page.query_selector_all("iframe")
-                print(f"iframes encontrados: {len(iframes)}")
-                if iframes:
-                    iframe_handle = iframes[0]
-                else:
-                    page_html = await page.content()
-                    print("=== INÍCIO PREVIEW HTML (SEM IFRAME) ===")
-                    print(page_html[:3000])
-                    print("=== FIM PREVIEW HTML ===")
+                print(f"iframes encontrados (fallback): {len(iframes)}")
+                for i, ifr in enumerate(iframes):
+                    src = await ifr.get_attribute("src")
+                    print(f"  iframe[{i}]: src='{src}'")
+                    if ifr and ("consulta" in (src or "").lower() or "pessoal" in (src or "").lower()):
+                        iframe_handle = ifr
+                        print(f"  -> Usando iframe {i}")
+                        break
+                if not iframe_handle:
+                    iframe_handle = iframes[0] if iframes else None
+                if not iframe_handle:
                     return None, "Iframe não encontrado na página principal."
 
             frame = await iframe_handle.content_frame()
             if not frame:
-                print("Não foi possível obter content_frame do iframe.")
+                print("ERRO: content_frame() retornou None")
                 return None, "Não foi possível acessar o conteúdo do iframe."
 
             print("Dentro do iframe com sucesso")
+            
+            # debug: imprime seletores disponíveis no iframe
+            input_exists = await frame.query_selector("#pesquisaAtos\\:cpf")
+            btn_exists = await frame.query_selector("#pesquisaAtos\\:abrirAtos")
+            table_exists = await frame.query_selector("table")
+            print(f"Debug seletores no iframe: cpf_input={input_exists is not None}, button={btn_exists is not None}, table={table_exists is not None}")
+            
             cpf_limpo = cpf_para_pesquisa.replace(".", "").replace("-", "")
-            print(f"CPF inserido: {cpf_limpo}")
+            print(f"CPF limpo: {cpf_limpo}")
 
             # preencher e submeter
             try:
@@ -73,40 +74,58 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
                 await frame.click("#pesquisaAtos\\:abrirAtos", timeout=5000)
                 print("Botão clicado com sucesso")
             except Exception as e_fill:
-                print(f"Erro ao preencher/clicar no iframe: {e_fill}")
-                frame_html = await frame.content()
-                print("=== INÍCIO PREVIEW HTML (APÓS ERRO DE FILL) ===")
-                print(frame_html[:3000])
-                print("=== FIM PREVIEW HTML ===")
-                return None, f"Falha ao interagir com o formulário do iframe: {e_fill}"
+                print(f"Erro ao preencher/clicar: {e_fill}")
+                return None, f"Falha ao interagir com o formulário: {e_fill}"
 
-            # aguardar resultados
-            await page.wait_for_timeout(5000)
+            # aguardar mudanças no DOM
+            print("Aguardando resultados (esperando mudança na tabela)...")
             try:
-                await frame.wait_for_selector("table tbody tr", timeout=15000)
-                print("Tabela encontrada com linhas")
-            except Exception:
-                print("Tabela/tbody/tr não apareceu; continuando mesmo assim...")
+                await frame.wait_for_function(
+                    """() => {
+                        const tbody = document.querySelector('tbody#form\\\\:mytable_data');
+                        if (!tbody) return false;
+                        const rows = tbody.querySelectorAll('tr');
+                        return rows.length > 0;
+                    }""",
+                    timeout=15000
+                )
+                print("Tabela foi alterada (dados ou mensagem de vazio)")
+            except Exception as e_wait:
+                print(f"Timeout aguardando mudança na tabela: {e_wait}. Continuando...")
 
-            # extrair HTML do iframe para debug
-            try:
-                frame_html = await frame.content()
-                print("=== INÍCIO PREVIEW DO IFRAME HTML ===")
-                print(frame_html[:4000])
-                print("=== FIM PREVIEW DO IFRAME HTML ===")
-            except Exception as e_preview:
-                print(f"Erro ao obter preview do iframe: {e_preview}")
+            await page.wait_for_timeout(2000)
 
-            # tentar extrair a tabela
+            # extrair HTML da tabela especificamente
             table_html = ""
             try:
+                # tenta pegar apenas o HTML da tabela
                 table_html = await frame.inner_html("table")
+                print(f"Table HTML extraído (tamanho: {len(table_html)} chars)")
             except Exception as e_table:
-                print(f"Erro ao extrair tabela: {e_table}")
+                print(f"Erro ao extrair table com inner_html: {e_table}")
+                # fallback: tenta get_attribute outerHTML
+                try:
+                    table_elem = await frame.query_selector("table")
+                    if table_elem:
+                        table_html = await table_elem.inner_html()
+                        print(f"Table HTML extraído com fallback (tamanho: {len(table_html)} chars)")
+                except Exception as e_fallback:
+                    print(f"Fallback também falhou: {e_fallback}")
 
             if not table_html or table_html.strip() == "":
-                print("AVISO: table_html está vazio ou None")
+                print("ERRO: table_html vazio. Imprimindo frame.content() para debug...")
+                try:
+                    frame_content = await frame.content()
+                    print("=== INÍCIO FRAME CONTENT COMPLETO ===")
+                    print(frame_content[:5000])
+                    print("=== FIM FRAME CONTENT ===")
+                except Exception as e_content:
+                    print(f"Erro ao obter frame.content(): {e_content}")
                 return None, "Tabela de resultados não encontrada no HTML processado."
+
+            # verifica se contém a mensagem "Nenhum registro"
+            if "Nenhum registro" in table_html:
+                print("AVISO: Tabela contém 'Nenhum registro encontrado'")
 
             print("Tabela extraída com sucesso")
             return table_html, None
@@ -143,33 +162,22 @@ def extract_data_from_html(html_content):
     print(f"Linhas encontradas no tbody: {len(rows)}")
     
     if not rows:
-        return [], "Nenhuma linha encontrada na tabela"
+        return [], "Nenhum registro encontrado para o CPF informado."
 
-    # Verifica a primeira linha
+    # verifica se é a linha vazia de "Nenhum registro encontrado"
     if len(rows) == 1:
         first_row_text = rows[0].text.strip()
-        print(f"Texto da primeira (única) linha: '{first_row_text}'")
-        if "nenhum registro" in first_row_text.lower() or first_row_text == "":
-            return [], None
+        print(f"Texto da primeira linha: '{first_row_text}'")
+        if "nenhum registro" in first_row_text.lower():
+            return [], None  # None = retornar mensagem padrão
 
+    # processar linhas com dados
     for idx, row in enumerate(rows):
         cells = row.find_all('td')
         print(f"Linha {idx}: {len(cells)} células encontradas")
         
-        for cell_idx, cell in enumerate(cells):
-            cell_text = cell.text.strip()
-            print(f"  Célula {cell_idx}: '{cell_text}'")
-        
-        row_data = {}
-        if len(cells) == len(headers):
-            for i, cell in enumerate(cells):
-                row_data[headers[i]] = cell.text.strip()
-            data.append(row_data)
-        else:
-            print(f"  Aviso: Número de células ({len(cells)}) não corresponde ao número de headers ({len(headers)})")
-            for i, cell in enumerate(cells):
-                key = headers[i] if i < len(headers) else f"col_{i}"
-                row_data[key] = cell.text.strip()
+        if cells and len(cells) == len(headers):
+            row_data = {headers[i]: cells[i].text.strip() for i in range(len(headers))}
             data.append(row_data)
 
     print(f"Total de registros extraídos: {len(data)}")
