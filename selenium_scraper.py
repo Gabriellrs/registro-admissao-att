@@ -45,8 +45,8 @@ def fetch_data_with_selenium(driver, cpf_para_pesquisa):
         cpf_input = wait.until(EC.presence_of_element_located((By.ID, "pesquisaAtos:cpf")))
         cpf_input.send_keys(cpf_para_pesquisa)
         
-        search_button = driver.find_element(By.ID, "pesquisaAtos:abrirAtos")
-        search_button.click()
+        search_button = wait.until(EC.element_to_be_clickable((By.ID, "pesquisaAtos:abrirAtos")))
+        driver.execute_script("arguments[0].click();", search_button)
 
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#panelGroup table tbody tr")))
         result_table = driver.find_element(By.ID, "panelGroup")
