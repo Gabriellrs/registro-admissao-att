@@ -17,7 +17,8 @@ from selenium.webdriver.chrome.service import Service
 
 def create_driver():
     """Cria e configura o WebDriver do Selenium para usar o Chromium em modo headless.
-    Usa webdriver-manager se disponível, senão tenta usar CHROMEDRIVER_PATH ou chromedriver no PATH."""
+    Usa webdriver-manager se disponível e tenta baixar a versão do chromedriver
+    correspondente à versão do Chromium detectada."""
     try:
         from webdriver_manager.chrome import ChromeDriverManager
         use_wdm = True
@@ -26,7 +27,6 @@ def create_driver():
         use_wdm = False
 
     options = webdriver.ChromeOptions()
-    # Headless moderno e opções úteis em container
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -36,15 +36,42 @@ def create_driver():
     options.add_argument("--window-size=1920,1080")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36")
 
-    chrome_bin = os.environ.get("CHROME_BIN") or os.environ.get("GOOGLE_CHROME_BIN") or os.environ.get("CHROME_PATH")
+    chrome_bin = os.environ.get("CHROME_BIN") or os.environ.get("GOOGLE_CHROME_BIN") or os.environ.get("CHROME_PATH") or "/usr/bin/chromium"
     if chrome_bin:
         options.binary_location = chrome_bin
         print(f"Usando binário do Chrome em: {chrome_bin}")
 
+    def detect_chrome_version(bin_path):
+        try:
+            import subprocess
+            out = subprocess.check_output([bin_path, "--version"], stderr=subprocess.STDOUT).decode(errors="ignore")
+            # ex: "Chromium 142.0.7444.175"
+            import re
+            m = re.search(r"(\d+\.\d+\.\d+\.\d+)", out)
+            if m:
+                return m.group(1)
+            m2 = re.search(r"(\d+)\.", out)
+            if m2:
+                return m2.group(1)
+        except Exception as e:
+            print(f"Não foi possível detectar versão do Chrome: {e}")
+        return None
+
     try:
         print("Iniciando o driver do Selenium com Chromium...")
         if use_wdm:
-            service = Service(ChromeDriverManager().install())
+            # tenta detectar versão do Chromium e instalar driver correspondente
+            chrome_ver = detect_chrome_version(options.binary_location)
+            try:
+                if chrome_ver:
+                    print(f"Versão do Chromium detectada: {chrome_ver}. Tentando baixar chromedriver correspondente.")
+                    service = Service(ChromeDriverManager(version=chrome_ver).install())
+                else:
+                    print("Versão do Chromium não detectada. Baixando chromedriver padrão.")
+                    service = Service(ChromeDriverManager().install())
+            except Exception as e:
+                print(f"Falha ao instalar chromedriver específico: {e}. Tentando instalação padrão.")
+                service = Service(ChromeDriverManager().install())
         else:
             chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
             if chromedriver_path:
