@@ -38,9 +38,9 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-# Instala dependências Python e browsers do Playwright
+# instalar dependências Python e baixar apenas o navegador (sem apt-get extra)
 RUN pip install --no-cache-dir -r requirements.txt && \
-    playwright install --with-deps chromium
+    playwright install chromium
 
 COPY . .
 
