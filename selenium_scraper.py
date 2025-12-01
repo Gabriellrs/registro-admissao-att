@@ -40,14 +40,6 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
                         print("page.goto sem wait_until OK")
                     except Exception as e_final:
                         print(f"Falha final ao navegar: {e_final}")
-                        # tenta salvar snapshot mínimo para debug
-                        try:
-                            html_preview = await page.content()
-                            with open("/tmp/page_debug_on_goto_fail.html", "w", encoding="utf-8") as f:
-                                f.write(html_preview)
-                            print("Salvo /tmp/page_debug_on_goto_fail.html")
-                        except Exception as se:
-                            print(f"Erro salvando debug HTML: {se}")
                         return None, f"Timeout ao acessar a página: {e_final}"
 
             # localizar iframe (fallbacks)
@@ -59,19 +51,15 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
                 if iframes:
                     iframe_handle = iframes[0]
                 else:
-                    # salva HTML para debug
                     page_html = await page.content()
-                    with open("/tmp/page_no_iframe.html", "w", encoding="utf-8") as f:
-                        f.write(page_html)
-                    print("Iframe não encontrado. Debug salvo em /tmp/page_no_iframe.html")
+                    print("=== INÍCIO PREVIEW HTML (SEM IFRAME) ===")
+                    print(page_html[:3000])
+                    print("=== FIM PREVIEW HTML ===")
                     return None, "Iframe não encontrado na página principal."
 
             frame = await iframe_handle.content_frame()
             if not frame:
-                page_html = await page.content()
-                with open("/tmp/page_iframe_no_frame.html", "w", encoding="utf-8") as f:
-                    f.write(page_html)
-                print("Não foi possível obter content_frame do iframe. Debug salvo em /tmp/page_iframe_no_frame.html")
+                print("Não foi possível obter content_frame do iframe.")
                 return None, "Não foi possível acessar o conteúdo do iframe."
 
             print("Dentro do iframe com sucesso")
@@ -81,48 +69,44 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
             # preencher e submeter
             try:
                 await frame.fill("#pesquisaAtos\\:cpf", cpf_limpo, timeout=5000)
+                print("CPF preenchido com sucesso")
                 await frame.click("#pesquisaAtos\\:abrirAtos", timeout=5000)
+                print("Botão clicado com sucesso")
             except Exception as e_fill:
                 print(f"Erro ao preencher/clicar no iframe: {e_fill}")
-                # salva iframe para debug
-                try:
-                    frame_html_dbg = await frame.content()
-                    with open("/tmp/iframe_after_fill_fail.html", "w", encoding="utf-8") as f:
-                        f.write(frame_html_dbg)
-                    print("Salvo /tmp/iframe_after_fill_fail.html")
-                except Exception as se:
-                    print(f"Erro salvando iframe debug: {se}")
+                frame_html = await frame.content()
+                print("=== INÍCIO PREVIEW HTML (APÓS ERRO DE FILL) ===")
+                print(frame_html[:3000])
+                print("=== FIM PREVIEW HTML ===")
                 return None, f"Falha ao interagir com o formulário do iframe: {e_fill}"
 
-            # aguardar resultados (tenta múltiplos timeouts)
-            await page.wait_for_timeout(4000)
+            # aguardar resultados
+            await page.wait_for_timeout(5000)
             try:
                 await frame.wait_for_selector("table tbody tr", timeout=15000)
                 print("Tabela encontrada com linhas")
             except Exception:
-                print("Tabela não apareceu dentro do timeout; vou salvar HTML de debug e tentar extrair qualquer tabela disponível")
+                print("Tabela/tbody/tr não apareceu; continuando mesmo assim...")
 
-            # salvar HTMLs de debug
+            # extrair HTML do iframe para debug
             try:
                 frame_html = await frame.content()
-                page_html = await page.content()
-                with open("/tmp/iframe_debug.html", "w", encoding="utf-8") as f:
-                    f.write(frame_html)
-                with open("/tmp/page_debug.html", "w", encoding="utf-8") as f:
-                    f.write(page_html)
-                print("HTML de debug salvo em /tmp/iframe_debug.html e /tmp/page_debug.html")
-            except Exception as e_save:
-                print(f"Erro salvando HTML de debug: {e_save}")
+                print("=== INÍCIO PREVIEW DO IFRAME HTML ===")
+                print(frame_html[:4000])
+                print("=== FIM PREVIEW DO IFRAME HTML ===")
+            except Exception as e_preview:
+                print(f"Erro ao obter preview do iframe: {e_preview}")
 
-            # tentar extrair a tabela (se existir)
+            # tentar extrair a tabela
             table_html = ""
             try:
                 table_html = await frame.inner_html("table")
-            except Exception:
-                table_html = ""
+            except Exception as e_table:
+                print(f"Erro ao extrair tabela: {e_table}")
 
             if not table_html or table_html.strip() == "":
-                return None, "Tabela de resultados não encontrada no HTML processado. Verifique /tmp/iframe_debug.html e /tmp/page_debug.html para debug."
+                print("AVISO: table_html está vazio ou None")
+                return None, "Tabela de resultados não encontrada no HTML processado."
 
             print("Tabela extraída com sucesso")
             return table_html, None
@@ -201,6 +185,7 @@ def buscar_registro_selenium():
     """Endpoint para buscar registro de admissão por CPF."""
     payload = request.get_json(force=True)
     cpf = payload.get("cpf") if payload else None
+    debug = payload.get("debug", False)  # novo parâmetro para debug
     
     if not cpf:
         return jsonify({"message": "CPF não informado."}), 400
@@ -209,6 +194,14 @@ def buscar_registro_selenium():
         html, err = asyncio.run(fetch_data_with_playwright(cpf))
         if err:
             return jsonify({"message": err}), 404
+        
+        # se debug=true, retorna o HTML bruto para inspeção
+        if debug:
+            return jsonify({
+                "debug": True,
+                "html_raw": html,
+                "message": "HTML bruto da tabela (debug mode)"
+            }), 200
         
         records, err2 = extract_data_from_html(html)
         if err2:
