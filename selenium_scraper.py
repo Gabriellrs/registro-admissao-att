@@ -106,29 +106,26 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
                         const tbody = document.querySelector('tbody#form\\\\:mytable_data');
                         if (!tbody) return false;
                         const rows = tbody.querySelectorAll('tr');
-                        if (rows.length === 0) return false; // Aguarda se estiver vazio
-                        if (rows.length > 1) return true; // Mais de 1 linha = dados carregados
-                        // Se 1 linha, verifica se NÃO é a de "Nenhum registro"
+                        if (rows.length === 0) return false;
+                        if (rows.length > 1) return true;
                         const firstRowText = rows[0].textContent || rows[0].innerText;
                         return !firstRowText.includes('Nenhum registro');
                     }""",
                     timeout=15000
                 )
-                log("Tabela foi alterada (dados ou mensagem de vazio)")
+                log("Tabela foi alterada (dados carregados)")
             except Exception as e_wait:
                 log(f"Timeout aguardando mudança na tabela: {e_wait}. Continuando...")
 
-
+            await page.wait_for_timeout(2000)
 
             # extrair HTML da tabela especificamente
             table_html = ""
             try:
-                # tenta pegar apenas o HTML da tabela
                 table_html = await frame.inner_html("table")
                 log(f"Table HTML extraído (tamanho: {len(table_html)} chars)")
             except Exception as e_table:
                 log(f"Erro ao extrair table com inner_html: {e_table}")
-                # fallback: tenta get_attribute outerHTML
                 try:
                     table_elem = await frame.query_selector("table")
                     if table_elem:
@@ -157,7 +154,7 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
 
         except Exception as e:
             log(f"Erro Playwright inesperado: {e}")
-            traceback.print_exc() # Still print to console for server-side debugging
+            traceback.print_exc()
             return None, f"Erro ao buscar dados: {e}", log_messages
         finally:
             try:
