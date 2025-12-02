@@ -166,6 +166,14 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
 
 def extract_data_from_html(html_content):
     """Extrai os dados da tabela de resultados a partir do HTML."""
+    if not html_content or html_content.strip() == "":
+        return [], "HTML vazio"
+    
+    # Se o HTML não tem <table> mas tem <thead>/<tbody>, envolve com <table>
+    if "<table" not in html_content.lower() and ("<thead" in html_content.lower() or "<tbody" in html_content.lower()):
+        html_content = f"<table>{html_content}</table>"
+        print("HTML ajustado: adicionada tag <table> envolvente")
+    
     soup = BeautifulSoup(html_content, 'html.parser')
     table = soup.find('table')
 
@@ -174,6 +182,9 @@ def extract_data_from_html(html_content):
 
     headers = [header.text.strip() for header in table.find_all('th')]
     print(f"Headers encontrados: {headers}")
+
+    if not headers:
+        return [], "Nenhum header encontrado na tabela"
 
     data = []
     tbody = table.find('tbody')
@@ -184,7 +195,7 @@ def extract_data_from_html(html_content):
     print(f"Linhas encontradas no tbody: {len(rows)}")
     
     if not rows:
-        return [], "Nenhum registro encontrado para o CPF informado."
+        return [], "Nenhuma linha encontrada na tabela"
 
     # verifica se é a linha vazia de "Nenhum registro encontrado"
     if len(rows) == 1:
@@ -200,6 +211,13 @@ def extract_data_from_html(html_content):
         
         if cells and len(cells) == len(headers):
             row_data = {headers[i]: cells[i].text.strip() for i in range(len(headers))}
+            data.append(row_data)
+        elif cells:
+            # fallback: tenta mapear mesmo com tamanhos diferentes
+            row_data = {}
+            for i, cell in enumerate(cells):
+                key = headers[i] if i < len(headers) else f"col_{i}"
+                row_data[key] = cell.text.strip()
             data.append(row_data)
 
     print(f"Total de registros extraídos: {len(data)}")
