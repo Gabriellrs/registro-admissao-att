@@ -63,6 +63,15 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
 
             log("Dentro do iframe com sucesso")
             
+            # Espera explícita pelos seletores do CPF e do botão para garantir que estejam prontos
+            try:
+                await frame.wait_for_selector("#pesquisaAtos\\:cpf", state="visible", timeout=10000)
+                await frame.wait_for_selector("#pesquisaAtos\\:abrirAtos", state="visible", timeout=10000)
+                log("Seletores de CPF e botão estão visíveis no iframe.")
+            except Exception as e_wait_selector:
+                log(f"Erro ao aguardar seletores no iframe: {e_wait_selector}")
+                return None, f"Elementos essenciais não encontrados no iframe: {e_wait_selector}", log_messages
+            
             # debug: imprime seletores disponíveis no iframe
             input_exists = await frame.query_selector("#pesquisaAtos\\:cpf")
             btn_exists = await frame.query_selector("#pesquisaAtos\\:abrirAtos")
@@ -76,9 +85,8 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
             try:
                 await frame.fill("#pesquisaAtos\\:cpf", cpf_limpo, timeout=5000)
                 log("CPF preenchido com sucesso")
-                await frame.wait_for_timeout(500)  # Pausa para garantir que JS processe
-                await frame.dispatch_event("#pesquisaAtos\\:abrirAtos", "click", timeout=5000)
-                log("Evento de clique disparado no botão")
+                await frame.click("#pesquisaAtos\\:abrirAtos", timeout=5000)
+                log("Botão clicado com sucesso")
             except Exception as e_fill:
                 log(f"Erro ao preencher/clicar: {e_fill}")
                 return None, f"Falha ao interagir com o formulário: {e_fill}", log_messages
@@ -103,7 +111,7 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
             except Exception as e_wait:
                 log(f"Timeout aguardando mudança na tabela: {e_wait}. Continuando...")
 
-            await page.wait_for_timeout(2000)
+
 
             # extrair HTML da tabela especificamente
             table_html = ""
