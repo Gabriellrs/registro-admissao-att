@@ -83,12 +83,19 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
 
             # preencher e submeter
             try:
+                log("Focando no campo CPF...")
+                await frame.focus("#pesquisaAtos\\:cpf", timeout=5000)
+                log("Preenchendo CPF...")
                 await frame.fill("#pesquisaAtos\\:cpf", cpf_limpo, timeout=5000)
                 log("CPF preenchido com sucesso")
+                
+                log("Movendo mouse sobre o botão de busca...")
+                await frame.hover("#pesquisaAtos\\:abrirAtos", timeout=5000)
+                log("Clicando no botão de busca...")
                 await frame.click("#pesquisaAtos\\:abrirAtos", timeout=5000)
                 log("Botão clicado com sucesso")
             except Exception as e_fill:
-                log(f"Erro ao preencher/clicar: {e_fill}")
+                log(f"Erro ao focar/preencher/clicar: {e_fill}")
                 return None, f"Falha ao interagir com o formulário: {e_fill}", log_messages
 
             # aguardar mudanças no DOM
