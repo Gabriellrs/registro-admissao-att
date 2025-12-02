@@ -12,6 +12,11 @@ from flask_cors import CORS
 async def fetch_data_with_playwright(cpf_para_pesquisa):
     """Busca dados usando Playwright com estratégias de fallback quando há timeout."""
     url = "https://www.tcmgo.tc.br/site/portal-da-transparencia/consulta-de-contratos-de-pessoal/"
+    log_messages = []
+
+    def log(message):
+        log_messages.append(message)
+        print(message)
 
     async with async_playwright() as p:
         launch_args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
@@ -20,65 +25,66 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
         context = await browser.new_context(user_agent=user_agent, viewport={"width":1920, "height":1080})
         page = await context.new_page()
         try:
-            print(f"Acessando a página para o CPF: {cpf_para_pesquisa}")
+            log(f"Acessando a página para o CPF: {cpf_para_pesquisa}")
 
             try:
                 await page.goto(url, wait_until="networkidle", timeout=60000)
-                print("page.goto networkidle OK")
+                log("page.goto networkidle OK")
             except Exception as e_net:
-                print(f"networkidle timeout: {e_net}. Tentando domcontentloaded...")
+                log(f"networkidle timeout: {e_net}. Tentando domcontentloaded...")
                 try:
                     await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                    print("page.goto domcontentloaded OK")
+                    log("page.goto domcontentloaded OK")
                 except Exception as e_dom:
-                    print(f"domcontentloaded falhou: {e_dom}")
-                    return None, f"Timeout ao acessar a página"
+                    log(f"domcontentloaded falhou: {e_dom}")
+                    return None, f"Timeout ao acessar a página", log_messages
 
-            print("Procurando iframe...")
+            log("Procurando iframe...")
             iframe_handle = await page.query_selector("iframe[src*='consulta-ato-pessoal']")
             if not iframe_handle:
                 iframes = await page.query_selector_all("iframe")
-                print(f"iframes encontrados (fallback): {len(iframes)}")
+                log(f"iframes encontrados (fallback): {len(iframes)}")
                 for i, ifr in enumerate(iframes):
                     src = await ifr.get_attribute("src")
-                    print(f"  iframe[{i}]: src='{src}'")
+                    log(f"  iframe[{i}]: src='{src}'")
                     if ifr and ("consulta" in (src or "").lower() or "pessoal" in (src or "").lower()):
                         iframe_handle = ifr
-                        print(f"  -> Usando iframe {i}")
+                        log(f"  -> Usando iframe {i}")
                         break
                 if not iframe_handle:
                     iframe_handle = iframes[0] if iframes else None
                 if not iframe_handle:
-                    return None, "Iframe não encontrado na página principal."
+                    return None, "Iframe não encontrado na página principal.", log_messages
 
             frame = await iframe_handle.content_frame()
             if not frame:
-                print("ERRO: content_frame() retornou None")
-                return None, "Não foi possível acessar o conteúdo do iframe."
+                log("ERRO: content_frame() retornou None")
+                return None, "Não foi possível acessar o conteúdo do iframe.", log_messages
 
-            print("Dentro do iframe com sucesso")
+            log("Dentro do iframe com sucesso")
             
             # debug: imprime seletores disponíveis no iframe
             input_exists = await frame.query_selector("#pesquisaAtos\\:cpf")
             btn_exists = await frame.query_selector("#pesquisaAtos\\:abrirAtos")
             table_exists = await frame.query_selector("table")
-            print(f"Debug seletores no iframe: cpf_input={input_exists is not None}, button={btn_exists is not None}, table={table_exists is not None}")
+            log(f"Debug seletores no iframe: cpf_input={input_exists is not None}, button={btn_exists is not None}, table={table_exists is not None}")
             
             cpf_limpo = cpf_para_pesquisa.replace(".", "").replace("-", "")
-            print(f"CPF limpo: {cpf_limpo}")
+            log(f"CPF limpo: {cpf_limpo}")
 
             # preencher e submeter
             try:
                 await frame.fill("#pesquisaAtos\\:cpf", cpf_limpo, timeout=5000)
-                print("CPF preenchido com sucesso")
-                await frame.click("#pesquisaAtos\\:abrirAtos", timeout=5000)
-                print("Botão clicado com sucesso")
+                log("CPF preenchido com sucesso")
+                await frame.wait_for_timeout(500)  # Pausa para garantir que JS processe
+                await frame.dispatch_event("#pesquisaAtos\\:abrirAtos", "click", timeout=5000)
+                log("Evento de clique disparado no botão")
             except Exception as e_fill:
-                print(f"Erro ao preencher/clicar: {e_fill}")
-                return None, f"Falha ao interagir com o formulário: {e_fill}"
+                log(f"Erro ao preencher/clicar: {e_fill}")
+                return None, f"Falha ao interagir com o formulário: {e_fill}", log_messages
 
             # aguardar mudanças no DOM
-            print("Aguardando resultados (esperando mudança na tabela)...")
+            log("Aguardando resultados (esperando mudança na tabela)...")
             try:
                 await frame.wait_for_function(
                     """() => {
@@ -93,9 +99,9 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
                     }""",
                     timeout=15000
                 )
-                print("Tabela foi alterada (dados ou mensagem de vazio)")
+                log("Tabela foi alterada (dados ou mensagem de vazio)")
             except Exception as e_wait:
-                print(f"Timeout aguardando mudança na tabela: {e_wait}. Continuando...")
+                log(f"Timeout aguardando mudança na tabela: {e_wait}. Continuando...")
 
             await page.wait_for_timeout(2000)
 
@@ -104,40 +110,40 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
             try:
                 # tenta pegar apenas o HTML da tabela
                 table_html = await frame.inner_html("table")
-                print(f"Table HTML extraído (tamanho: {len(table_html)} chars)")
+                log(f"Table HTML extraído (tamanho: {len(table_html)} chars)")
             except Exception as e_table:
-                print(f"Erro ao extrair table com inner_html: {e_table}")
+                log(f"Erro ao extrair table com inner_html: {e_table}")
                 # fallback: tenta get_attribute outerHTML
                 try:
                     table_elem = await frame.query_selector("table")
                     if table_elem:
                         table_html = await table_elem.inner_html()
-                        print(f"Table HTML extraído com fallback (tamanho: {len(table_html)} chars)")
+                        log(f"Table HTML extraído com fallback (tamanho: {len(table_html)} chars)")
                 except Exception as e_fallback:
-                    print(f"Fallback também falhou: {e_fallback}")
+                    log(f"Fallback também falhou: {e_fallback}")
 
             if not table_html or table_html.strip() == "":
-                print("ERRO: table_html vazio. Imprimindo frame.content() para debug...")
+                log("ERRO: table_html vazio. Imprimindo frame.content() para debug...")
                 try:
                     frame_content = await frame.content()
-                    print("=== INÍCIO FRAME CONTENT COMPLETO ===")
-                    print(frame_content[:5000])
-                    print("=== FIM FRAME CONTENT ===")
+                    log("=== INÍCIO FRAME CONTENT COMPLETO ===")
+                    log(frame_content[:5000])
+                    log("=== FIM FRAME CONTENT ===")
                 except Exception as e_content:
-                    print(f"Erro ao obter frame.content(): {e_content}")
-                return None, "Tabela de resultados não encontrada no HTML processado."
+                    log(f"Erro ao obter frame.content(): {e_content}")
+                return None, "Tabela de resultados não encontrada no HTML processado.", log_messages
 
             # verifica se contém a mensagem "Nenhum registro"
             if "Nenhum registro" in table_html:
-                print("AVISO: Tabela contém 'Nenhum registro encontrado'")
+                log("AVISO: Tabela contém 'Nenhum registro encontrado'")
 
-            print("Tabela extraída com sucesso")
-            return table_html, None
+            log("Tabela extraída com sucesso")
+            return table_html, None, log_messages
 
         except Exception as e:
-            print(f"Erro Playwright inesperado: {e}")
-            traceback.print_exc()
-            return None, f"Erro ao buscar dados: {e}"
+            log(f"Erro Playwright inesperado: {e}")
+            traceback.print_exc() # Still print to console for server-side debugging
+            return None, f"Erro ao buscar dados: {e}", log_messages
         finally:
             try:
                 await context.close()
@@ -203,26 +209,26 @@ def buscar_registro_selenium():
         return jsonify({"message": "CPF não informado."}), 400
 
     try:
-        html, err = asyncio.run(fetch_data_with_playwright(cpf))
+        html, err, logs = asyncio.run(fetch_data_with_playwright(cpf))
         if err:
-            return jsonify({"message": err}), 404
+            return jsonify({"message": err, "logs": logs}), 404
         
         # se debug=true, retorna o HTML bruto para inspeção
         if debug:
             return jsonify({
                 "debug": True,
                 "html_raw": html,
-                "message": "HTML bruto da tabela (debug mode)"
+                "message": "HTML bruto da tabela (debug mode)",
+                "logs": logs
             }), 200
         
         records, err2 = extract_data_from_html(html)
         if err2:
-            return jsonify({"message": err2}), 404
+            return jsonify({"message": err2, "logs": logs}), 404
         
-        print(f"Encontrados {len(records)} registros de admissão para o CPF.")
-        return jsonify({"count": len(records), "records": records}), 200
+        return jsonify({"count": len(records), "records": records, "logs": logs}), 200
         
     except Exception as e:
         print(f"Erro na requisição: {e}")
         traceback.print_exc()
-        return jsonify({"message": f"Erro interno: {e}"}), 500
+        return jsonify({"message": f"Erro interno: {e}", "logs": ["Erro interno: " + str(e)]}), 500
