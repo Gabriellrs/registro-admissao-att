@@ -237,11 +237,16 @@ def buscar_registro_selenium():
                 "logs": logs
             }), 200
         
-        records, err2 = extract_data_from_html(html)
+        all_records, err2 = extract_data_from_html(html)
         if err2:
             return jsonify({"message": err2, "logs": logs}), 404
         
-        return jsonify({"count": len(records), "records": records, "logs": logs}), 200
+        tipos_desejados = ["Admissao", "Concursado"]
+        filtered_records = [
+            item for item in all_records if item.get('Tipo de Contrato') in tipos_desejados
+        ]
+        
+        return jsonify({"count": len(filtered_records), "records": filtered_records, "logs": logs}), 200
         
     except Exception as e:
         print(f"Erro na requisição: {e}")
