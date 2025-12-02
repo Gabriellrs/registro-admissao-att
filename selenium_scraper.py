@@ -215,37 +215,45 @@ def buscar_registro_selenium():
     """Endpoint para buscar registro de admissão por CPF."""
     payload = request.get_json(force=True)
     cpf = payload.get("cpf") if payload else None
-    debug = payload.get("debug", False)  # novo parâmetro para debug
+    debug = payload.get("debug", False)
     
     if not cpf:
         return jsonify({"message": "CPF não informado."}), 400
 
     try:
         html, err, logs = asyncio.run(fetch_data_with_playwright(cpf))
-        if err:
-            return jsonify({"message": err, "logs": logs}), 404
         
         # se debug=true, retorna o HTML bruto para inspeção
         if debug:
             return jsonify({
                 "debug": True,
                 "html_raw": html,
-                "message": "HTML bruto da tabela (debug mode)",
-                "logs": logs
+                "logs": logs,
+                "message": "HTML bruto da tabela (debug mode)"
             }), 200
         
-        all_records, err2 = extract_data_from_html(html)
+        if err:
+            return jsonify({
+                "message": err,
+                "logs": logs
+            }), 404
+        
+        records, err2 = extract_data_from_html(html)
         if err2:
-            return jsonify({"message": err2, "logs": logs}), 404
+            return jsonify({
+                "message": err2,
+                "logs": logs
+            }), 404
         
-        tipos_desejados = ["Admissao", "Concursado"]
-        filtered_records = [
-            item for item in all_records if item.get('Tipo de Contrato') in tipos_desejados
-        ]
-        
-        return jsonify({"count": len(filtered_records), "records": filtered_records, "logs": logs}), 200
+        print(f"Encontrados {len(records)} registros de admissão para o CPF.")
+        return jsonify({
+            "success": True,
+            "count": len(records),
+            "records": records,
+            "logs": logs
+        }), 200
         
     except Exception as e:
         print(f"Erro na requisição: {e}")
         traceback.print_exc()
-        return jsonify({"message": f"Erro interno: {e}", "logs": ["Erro interno: " + str(e)]}), 500
+        return jsonify({"message": f"Erro interno: {e}"}), 500
