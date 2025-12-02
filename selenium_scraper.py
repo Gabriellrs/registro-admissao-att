@@ -85,7 +85,11 @@ async def fetch_data_with_playwright(cpf_para_pesquisa):
                         const tbody = document.querySelector('tbody#form\\\\:mytable_data');
                         if (!tbody) return false;
                         const rows = tbody.querySelectorAll('tr');
-                        return rows.length > 0;
+                        if (rows.length === 0) return false; // Aguarda se estiver vazio
+                        if (rows.length > 1) return true; // Mais de 1 linha = dados carregados
+                        // Se 1 linha, verifica se NÃO é a de "Nenhum registro"
+                        const firstRowText = rows[0].textContent || rows[0].innerText;
+                        return !firstRowText.includes('Nenhum registro');
                     }""",
                     timeout=15000
                 )
