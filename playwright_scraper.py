@@ -1,4 +1,4 @@
-# selenium_scraper.py
+# playwright_scraper.py
 import os
 import time
 import json
