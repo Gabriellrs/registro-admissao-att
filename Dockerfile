@@ -1,47 +1,23 @@
-FROM python:3.10-slim
-
-# Instalar dependências do sistema necessárias para Playwright (ajustado para Debian slim)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    wget \
-    libglib2.0-0 \
-    libgobject-2.0-0 \
-    libnss3 \
-    libnspr4 \
-    libdbus-1-3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libgio-2.0-0 \
-    libdrm2 \
-    libexpat1 \
-    libxcb1 \
-    libxkbcommon0 \
-    libx11-6 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxext6 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libasound2 \
-    libatspi2.0-0 \
-    libxss1 \
-    libxtst6 \
-    libgtk-3-0 \
- && rm -rf /var/lib/apt/lists/*
+# Usando a imagem oficial do Playwright que já tem Python e todas as libs de sistema
+FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
 
 WORKDIR /app
 
+# Copia apenas o requirements primeiro para aproveitar o cache do Docker
 COPY requirements.txt .
 
-# instalar dependências Python e baixar apenas o navegador (sem apt-get extra)
-RUN pip install --no-cache-dir -r requirements.txt && \
-    playwright install chromium
+# Instala as dependências do Python
+RUN pip install --no-cache-dir -r requirements.txt
 
+# Copia o restante dos arquivos
 COPY . .
 
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "120", "selenium_scraper:app"]
+# Instala apenas o navegador Chromium (sem precisar de permissões de root extras)
+RUN playwright install chromium
+
+# Porta padrão que o Render espera
+EXPOSE 10000
+
+# O PONTO CHAVE: Mudamos 'selenium_scraper' para 'playwright_scraper'
+# Aumentamos o timeout para 120s pois scrapers podem demorar
+CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "120", "playwright_scraper:app"]
