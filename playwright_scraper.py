@@ -83,6 +83,7 @@ async def fetch_data_with_playwright(cpf=None, nome=None):
 
             # Seletores PrimeFaces (escapando os dois pontos)
             selector_cpf = "#pesquisaAtos\\:cpf"
+            # CORREÇÃO CRUCIAL AQUI: ID correto do campo Nome
             selector_nome = "#pesquisaAtos\\:form_nome"
             selector_btn = "#pesquisaAtos\\:abrirAtos"
 
@@ -95,6 +96,9 @@ async def fetch_data_with_playwright(cpf=None, nome=None):
             elif nome:
                 log(f"Filtrando por Nome: {nome}")
                 await frame.fill(selector_nome, nome.upper())
+                # TRUQUE IMPORTANTE: Pressionar TAB para disparar o evento que o PrimeFaces precisa
+                await frame.press(selector_nome, "Tab")
+                await page.wait_for_timeout(500) # Pausa rápida pro JS processar
 
             await frame.click(selector_btn)
             log("Busca enviada. Iniciando coleta de páginas...")
