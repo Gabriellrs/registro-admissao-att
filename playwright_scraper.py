@@ -212,9 +212,19 @@ async def fetch_data_with_playwright(cpf=None, nome=None, municipio_filtro=None,
             except:
                 return None, "Botão de consulta não apareceu.", log_messages
 
+            if cpf:
+                log(f"Preenchendo CPF: {cpf}")
+                cpf_limpo = cpf.replace(".", "").replace("-", "")
+                await frame.fill(selector_cpf, cpf_limpo)
+            elif nome:
+                log(f"Preenchendo Nome: {nome}")
+                await frame.fill(selector_nome, nome.upper())
+                await frame.press(selector_nome, "Tab") # TRUQUE DO TAB
+                await page.wait_for_timeout(500)
             
             # --- SELEÇÃO DE MUNICÍPIO (DROPDOWN FUZZY) ---
-            if municipio_filtro:
+            # SE TIVER CPF, IGNORA O MUNICÍPIO (Busca Global)
+            if municipio_filtro and not cpf:
                 log(f"Tentando selecionar município: {municipio_filtro}")
                 xpath_mun = "//label[contains(text(), 'Município')]/following-sibling::select"
                 match_found = await select_dropdown_fuzzy(frame, xpath_mun, municipio_filtro)
@@ -223,6 +233,8 @@ async def fetch_data_with_playwright(cpf=None, nome=None, municipio_filtro=None,
                     await page.wait_for_timeout(2000)
                 else:
                     log("WARN: Município não encontrado no dropdown. A busca prosseguirá SEM filtro de município.")
+            elif cpf:
+                 log("Busca por CPF detectada: Ignorando filtro de município (Busca Global).")
             
             # --- LOOP DE PREENCHIMENTO ROBUSTO ---
             # O PrimeFaces pode limpar os campos após o AJAX do município. 
@@ -262,21 +274,38 @@ async def fetch_data_with_playwright(cpf=None, nome=None, municipio_filtro=None,
                     log(f"  >> FALHA: O valor diferiu ou sumiu. Tentando novamente...")
                     await page.wait_for_timeout(1000)
 
+            # --- CAPTURA ELEMENTO ANTIGO (PARA VERIFICAR REFRESH) ---
+            old_table = await frame.query_selector("tbody#form\\:mytable_data")
+
             log("Clicando em Consultar...")
             await frame.click(selector_btn)
             
-            # Espera robusta para AJAX
-            log("Aguardando 10 segundos para processamento...")
-            await page.wait_for_timeout(10000)
+            # --- ESPERA INTELIGENTE (STALE ELEMENT) ---
+            # O PrimeFaces destroi e recria a tabela. Se esperarmos o antigo sumir, garantimos o refresh.
+            if old_table:
+                try:
+                    log("Aguardando tabela antiga ser removida (AJAX)...")
+                    # 'hidden' abrange detached ou invisivel
+                    await old_table.wait_for_element_state("hidden", timeout=30000)
+                except:
+                    log("WARN: Tabela antiga não desapareceu ou timeout. O AJAX pode ter falhado ou sido muito rápido.")
+            
+            # Espera a NOVA tabela aparecer
+            log("Aguardando nova tabela de resultados...")
+            await frame.wait_for_selector("tbody#form\\:mytable_data", state="visible", timeout=30000)
+            
+            # Espera extra de segurança para renderização final
+            await page.wait_for_timeout(2000)
 
             # --- PAGINAÇÃO E COLETA ---
             pagina = 1
             while True:
                 log(f"Lendo página {pagina}...")
                 
-                # Tenta esperar a tabela aparecer
+                # A tabela já deve estar visivel pelo wait acima
+                # Mas mantemos um check rapido
                 try:
-                    await frame.wait_for_selector("tbody#form\\:mytable_data", timeout=10000)
+                    await frame.wait_for_selector("tbody#form\\:mytable_data", timeout=5000)
                 except:
                     log("Tabela não carregou ou timeout na paginação.")
                     break
