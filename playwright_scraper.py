@@ -83,7 +83,7 @@ async def fetch_data_with_playwright(cpf=None, nome=None):
 
             # Seletores PrimeFaces (escapando os dois pontos)
             selector_cpf = "#pesquisaAtos\\:cpf"
-            selector_nome = "#pesquisaAtos\\:nome"
+            selector_nome = "#pesquisaAtos\\:form_nome"
             selector_btn = "#pesquisaAtos\\:abrirAtos"
 
             await frame.wait_for_selector(selector_btn, state="visible")
