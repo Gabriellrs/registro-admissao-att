@@ -76,7 +76,7 @@ def filter_records(records, municipio=None, cargo=None):
     for r in records:
         match = True
         
-        # Filtro de Município
+        # Filtro de Município (APENAS SE PASSADO - geralmente agora é filtrado via Dropdown)
         if municipio:
             mun_record = r.get('Município', '').lower()
             if municipio.lower() not in mun_record:
@@ -92,6 +92,56 @@ def filter_records(records, municipio=None, cargo=None):
             filtered.append(r)
             
     return filtered
+
+async def select_dropdown_fuzzy(frame, selector_xpath, text_to_match):
+    """
+    Seleciona uma opção no dropdown que contenha o texto_to_match (fuzzy/parcial).
+    Retorna True se achou e selecionou, False caso contrário.
+    """
+    if not text_to_match:
+        return False
+        
+    try:
+        # Pega todas as opções do select
+        # XPath para o select deve ser passado corretamente
+        select_handle = await frame.query_selector(f"xpath={selector_xpath}")
+        if not select_handle:
+            print(f"Dropdown não encontrado: {selector_xpath}")
+            return False
+            
+        options = await select_handle.query_selector_all("option")
+        best_match_value = None
+        best_match_text = ""
+        
+        target = text_to_match.lower()
+        
+        # Estrategia 1: Match Exato ou Contains Forte
+        for opt in options:
+            text = await opt.text_content()
+            val = await opt.get_attribute("value")
+            
+            if not text or val == "0" or val == "-1" or val == "": # Ignora opções neutras
+                continue
+                
+            t_lower = text.lower()
+            
+            # Se o texto alvo contiver o texto da opção (ex: "ITAPURANGA PREVGO" contem "ITAPURANGA")
+            if t_lower in target or target in t_lower:
+                best_match_value = val
+                best_match_text = text
+                break
+        
+        if best_match_value:
+            print(f"Selecionando Município: '{best_match_text}' (Match com '{text_to_match}')")
+            await select_handle.select_option(value=best_match_value)
+            return True
+        else:
+            print(f"Nenhuma opção de município encontrada para '{text_to_match}'")
+            return False
+            
+    except Exception as e:
+        print(f"Erro ao selecionar dropdown: {e}")
+        return False
 
 # --- CORE DO SCRAPER ---
 
@@ -169,10 +219,18 @@ async def fetch_data_with_playwright(cpf=None, nome=None, municipio_filtro=None,
             elif nome:
                 log(f"Preenchendo Nome: {nome}")
                 await frame.fill(selector_nome, nome.upper())
-                # TRUQUE DO TAB PARA PRIMEFACES RECONHECER O CAMPO
-                await frame.press(selector_nome, "Tab")
+                await frame.press(selector_nome, "Tab") # TRUQUE DO TAB
                 await page.wait_for_timeout(500)
-
+            
+            # --- SELEÇÃO DE MUNICÍPIO (DROPDOWN FUZZY) ---
+            if municipio_filtro:
+                log(f"Tentando selecionar município: {municipio_filtro}")
+                # XPath: Label contendo "Município" -> select vizinho
+                xpath_mun = "//label[contains(text(), 'Município')]/following-sibling::select"
+                match_found = await select_dropdown_fuzzy(frame, xpath_mun, municipio_filtro)
+                if not match_found:
+                    log("WARN: Município não encontrado no dropdown. A busca prosseguirá SEM filtro de município.")
+            
             log("Clicando em Consultar...")
             await frame.click(selector_btn)
             
@@ -216,10 +274,12 @@ async def fetch_data_with_playwright(cpf=None, nome=None, municipio_filtro=None,
                     break
 
             # --- FILTRAGEM PÓS-BUSCA ---
-            if municipio_filtro or cargo_filtro:
+            # OBS: Se selecionamos o município no Dropdown, não precisamos filtrar de novo aqui, exceto se quiser dupla segurança.
+            # Vamos manter apenas Cargo, para não filtrar excessivamente caso o nome da cidade tenha "match parcial".
+            if cargo_filtro:
                 count_before = len(all_records)
-                log(f"Aplicando filtros: Mun='{municipio_filtro}', Cargo='{cargo_filtro}'")
-                all_records = filter_records(all_records, municipio=municipio_filtro, cargo=cargo_filtro)
+                log(f"Aplicando filtros pós-busca: Cargo='{cargo_filtro}'")
+                all_records = filter_records(all_records, municipio=None, cargo=cargo_filtro)
                 log(f"Registros após filtro: {count_before} -> {len(all_records)}")
 
             return all_records, None, log_messages
