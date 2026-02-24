@@ -3,6 +3,8 @@ import time
 import json
 import asyncio
 import traceback
+import re
+import unicodedata
 from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
@@ -12,6 +14,28 @@ app = Flask(__name__)
 CORS(app)
 
 # --- FUNÇÕES DE UTILIDADE ---
+
+def limpar_nome(nome):
+    """
+    Limpa o nome: remove acentos, remove o Ç/ç completamente, 
+    remove caracteres especiais, tira espaços extras e converte para maiúsculas.
+    """
+    if not nome:
+        return nome
+        
+    # 0. Remove o 'Ç' e 'ç' completamente antes de qualquer conversão
+    nome_sem_cedilha = nome.replace('Ç', '').replace('ç', '')
+        
+    # 1. Normaliza a string (remove os acentos do restante do texto)
+    nome_normalizado = unicodedata.normalize('NFKD', nome_sem_cedilha).encode('ASCII', 'ignore').decode('utf-8')
+    
+    # 2. Remove caracteres especiais (mantém apenas letras de A-Z e espaços)
+    nome_apenas_letras = re.sub(r'[^a-zA-Z\s]', '', nome_normalizado)
+    
+    # 3. Remove espaços duplicados no meio, espaços nas pontas e joga para maiúsculo
+    nome_limpo = re.sub(r'\s+', ' ', nome_apenas_letras).strip().upper()
+    
+    return nome_limpo
 
 def extract_data_from_html(html_content):
     """Extrai os dados da tabela de resultados a partir do HTML."""
@@ -147,6 +171,11 @@ async def select_dropdown_fuzzy(frame, selector_xpath, text_to_match):
 
 async def fetch_data_with_playwright(cpf=None, nome=None, municipio_filtro=None, cargo_filtro=None):
     """Busca dados usando Playwright com estratégias de fallback e suporte a paginação/filtros."""
+    
+    # Aplica a limpeza no nome logo no início
+    if nome:
+        nome = limpar_nome(nome)
+        
     url = "https://www.tcmgo.tc.br/site/portal-da-transparencia/consulta-de-contratos-de-pessoal/"
     log_messages = []
     all_records = []
@@ -213,12 +242,12 @@ async def fetch_data_with_playwright(cpf=None, nome=None, municipio_filtro=None,
                 return None, "Botão de consulta não apareceu.", log_messages
 
             if cpf:
-                log(f"Preenchendo CPF: {cpf}")
                 cpf_limpo = cpf.replace(".", "").replace("-", "")
+                log(f"Preenchendo CPF: {cpf_limpo}")
                 await frame.fill(selector_cpf, cpf_limpo)
             elif nome:
                 log(f"Preenchendo Nome: {nome}")
-                await frame.fill(selector_nome, nome.upper())
+                await frame.fill(selector_nome, nome)
                 await frame.press(selector_nome, "Tab") # TRUQUE DO TAB
                 await page.wait_for_timeout(500)
             
@@ -251,7 +280,7 @@ async def fetch_data_with_playwright(cpf=None, nome=None, municipio_filtro=None,
                     await frame.fill(selector_cpf, cpf_limpo)
                 elif nome:
                     log(f"  Preenchendo Nome: '{nome}'")
-                    await frame.fill(selector_nome, nome.upper())
+                    await frame.fill(selector_nome, nome)
                     await frame.press(selector_nome, "Tab")
                 
                 log("  Aguardando 500ms para persistência...")
@@ -263,7 +292,7 @@ async def fetch_data_with_playwright(cpf=None, nome=None, municipio_filtro=None,
                     target_check = cpf_limpo
                 else:
                     val_check = await frame.input_value(selector_nome)
-                    target_check = nome.upper()
+                    target_check = nome
                 
                 log(f"  Verificação -> Valor no Input: '{val_check}' | Valor Esperado: '{target_check}'")
                 
